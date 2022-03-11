@@ -1,0 +1,5 @@
+Bundle-Name: PublishLayoutOverride
+Bundle-SymbolicName: com.liferay.override.staging.publication.layout
+Bundle-Version: 1.0.0
+
+Web-ContextPath: /page-publication-web-override

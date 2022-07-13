@@ -4,6 +4,7 @@ import com.liferay.exportimport.constants.ExportImportPortletKeys;
 import com.liferay.exportimport.kernel.configuration.ExportImportConfigurationFactory;
 import com.liferay.exportimport.kernel.model.ExportImportConfiguration;
 import com.liferay.exportimport.kernel.service.ExportImportConfigurationLocalService;
+import com.liferay.petra.string.StringPool;
 import com.liferay.portal.kernel.exception.NoSuchGroupException;
 import com.liferay.portal.kernel.exception.PortalException;
 import com.liferay.portal.kernel.model.Layout;
@@ -11,16 +12,19 @@ import com.liferay.portal.kernel.portlet.bridges.mvc.MVCRenderCommand;
 import com.liferay.portal.kernel.portlet.bridges.mvc.constants.MVCRenderConstants;
 import com.liferay.portal.kernel.security.auth.PrincipalException;
 import com.liferay.portal.kernel.service.LayoutLocalService;
+import com.liferay.portal.kernel.service.ServiceContext;
 import com.liferay.portal.kernel.servlet.SessionErrors;
 import com.liferay.portal.kernel.theme.ThemeDisplay;
 import com.liferay.portal.kernel.util.ParamUtil;
 import com.liferay.portal.kernel.util.Portal;
-import com.liferay.portal.kernel.util.PortalUtil;
 import com.liferay.portal.kernel.util.WebKeys;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 import javax.portlet.PortletException;
 import javax.portlet.PortletRequest;
@@ -33,6 +37,8 @@ import javax.servlet.http.HttpServletResponse;
 
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component(
 		immediate = true,
@@ -45,14 +51,20 @@ import org.osgi.service.component.annotations.Reference;
 	)
 public class PublishSingleLayoutMVCRenderCommand implements MVCRenderCommand {
 
+	private static Logger LOG = LoggerFactory.getLogger(PublishSingleLayoutMVCRenderCommand.class);
+
 	@Override
 	public String render(
 			RenderRequest renderRequest, RenderResponse renderResponse)
 		throws PortletException {
 
+		long plid = getPlid(renderRequest);
+
 		try {
 			long exportImportConfigurationId = ParamUtil.getLong(
 				renderRequest, "exportImportConfigurationId");
+			
+			renderRequest.setAttribute("plid", plid);
 
 			if (exportImportConfigurationId <= 0) {
 				createExportImportConfiguration(renderRequest);
@@ -72,7 +84,6 @@ public class PublishSingleLayoutMVCRenderCommand implements MVCRenderCommand {
 			throw new PortletException(exception);
 		}
 		
-		long plid = getPlid(renderRequest);
 		Layout layout;
 		try {
 			layout = _layoutLocalService.getLayout(plid);
@@ -160,28 +171,39 @@ public class PublishSingleLayoutMVCRenderCommand implements MVCRenderCommand {
 	protected void createExportImportConfiguration(RenderRequest renderRequest)
 		throws PortalException {
 
-		ExportImportConfiguration exportImportConfiguration = null;
-
-		boolean localPublishing = ParamUtil.getBoolean(
-			renderRequest, "localPublishing");
-
-		if (localPublishing) {
-			exportImportConfiguration =
-				ExportImportConfigurationFactory.
-					buildDefaultLocalPublishingExportImportConfiguration(
-						renderRequest);
-		}
-		else {
-			exportImportConfiguration =
-				ExportImportConfigurationFactory.
-					buildDefaultRemotePublishingExportImportConfiguration(
-						renderRequest);
-		}
-		
 		long plid = getPlid(renderRequest);
-		
 		Layout layout = _layoutLocalService.getLayout(plid);
+		long[] layoutIds = new long[1];
+		layoutIds[0] = layout.getLayoutId();
+		
+		ExportImportConfiguration exportImportConfiguration = null;
+		
+		exportImportConfiguration =
+			ExportImportConfigurationFactory.
+				buildDefaultLocalPublishingExportImportConfiguration(
+					renderRequest);
+		
+		Map<String, Serializable> settingsMap = exportImportConfiguration.getSettingsMap();
+		settingsMap.remove("layoutIds");
+		settingsMap.put("layoutIds", layoutIds);
+		
+		_exportImportConfigurationLocalService.updateExportImportConfiguration(
+				exportImportConfiguration.getUserId(),
+				exportImportConfiguration.getExportImportConfigurationId(),
+				"Publish single layout " + layout.getName(Locale.getDefault()),
+				StringPool.BLANK,
+				settingsMap,
+				new ServiceContext());
+		
 		renderRequest.setAttribute("layout", layout);
+		if(layout.getAncestors().size() > 0) {
+			renderRequest.setAttribute("hasAncestors", true);
+			List<String> ancestorFriendlyURLs = new ArrayList<String>();
+			layout.getAncestors().forEach(ancestor -> {
+				ancestorFriendlyURLs.add(ancestor.getFriendlyURL(getLocale(renderRequest)));
+			});
+			renderRequest.setAttribute("ancestorFriendlyURLs", ancestorFriendlyURLs);
+		}
 
 		renderRequest.setAttribute(
 			"exportImportConfigurationId",
@@ -195,7 +217,14 @@ public class PublishSingleLayoutMVCRenderCommand implements MVCRenderCommand {
 		long plid = themeDisplay.getPlid();
 		return plid;
 	}
+
+	private Locale getLocale(RenderRequest renderRequest) {
+		HttpServletRequest httpServletRequest = _portal.getHttpServletRequest(renderRequest);
+		ThemeDisplay themeDisplay = (ThemeDisplay)httpServletRequest.getAttribute(WebKeys.THEME_DISPLAY);
 		
+		return themeDisplay.getLocale();
+	}
+
 	@Reference
 	private Portal _portal;
 	
